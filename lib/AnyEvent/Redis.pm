@@ -2,7 +2,7 @@ package AnyEvent::Redis;
 
 use strict;
 use 5.008_001;
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 use constant DEBUG => $ENV{ANYEVENT_REDIS_DEBUG};
 use AnyEvent;
@@ -45,7 +45,7 @@ sub AUTOLOAD {
 sub all_cv {
     my $self = shift;
     $self->{all_cv} = shift if @_;
-    unless ($self->{all_cv} && !$self->{all_cv}->ready) {
+    unless ($self->{all_cv}) {
         $self->{all_cv} = AE::cv;
     }
     $self->{all_cv};
