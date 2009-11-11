@@ -23,8 +23,9 @@ no_index:
 requires:
   AnyEvent: 0
   Filter::Util::Call: 0
+  Try::Tiny: 0
   perl: 5.8.1
 resources:
   license: http://dev.perl.org/licenses/
   repository: git://github.com/miyagawa/AnyEvent-Redis.git
-version: 0.03
+version: 0.04
