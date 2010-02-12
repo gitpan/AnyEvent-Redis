@@ -3,13 +3,17 @@ package Test::TCP;
 use strict;
 use warnings;
 use 5.00800;
-our $VERSION = '0.13';
+our $VERSION = '0.16';
 use base qw/Exporter/;
 use IO::Socket::INET;
 use Test::SharedFork;
 use Test::More ();
 use Config;
 use POSIX;
+use Time::HiRes ();
+
+# process does not die when received SIGTERM, on win32.
+my $TERMSIG = $^O eq 'MSWin32' ? 'KILL' : 'TERM';
 
 our @EXPORT = qw/ empty_port test_tcp wait_port /;
 
@@ -23,7 +27,7 @@ sub empty_port {
             LocalAddr => '127.0.0.1',
             LocalPort => $port,
             Proto     => 'tcp',
-            ReuseAddr => 1,
+            (($^O eq 'MSWin32') ? () : (ReuseAddr => 1)),
         );
         return $port if $sock;
     }
@@ -52,12 +56,19 @@ sub test_tcp {
             $err = $@;
 
             # cleanup
-            kill TERM => $pid;
-            waitpid( $pid, 0 );
-            if (WIFSIGNALED($?)) {
-                my $signame = (split(' ', $Config{sig_name}))[WTERMSIG($?)];
-                if ($signame =~ /^(ABRT|PIPE)$/) {
-                    Test::More::diag("your server received SIG$signame");
+            kill $TERMSIG => $pid;
+            while (1) {
+                my $kid = waitpid( $pid, 0 );
+                if ($^O ne 'MSWin32') { # i'm not in hell
+                    if (WIFSIGNALED($?)) {
+                        my $signame = (split(' ', $Config{sig_name}))[WTERMSIG($?)];
+                        if ($signame =~ /^(ABRT|PIPE)$/) {
+                            Test::More::diag("your server received SIG$signame");
+                        }
+                    }
+                }
+                if ($kid == 0 || $kid == -1) {
+                    last;
                 }
             }
         }
@@ -99,10 +110,10 @@ sub _check_port {
 sub wait_port {
     my $port = shift;
 
-    my $retry = 10;
+    my $retry = 100;
     while ( $retry-- ) {
         return if _check_port($port);
-        sleep 1;
+        Time::HiRes::sleep(0.1);
     }
     die "cannot open port: $port";
 }
@@ -112,4 +123,4 @@ __END__
 
 =encoding utf8
 
-#line 228
+#line 241

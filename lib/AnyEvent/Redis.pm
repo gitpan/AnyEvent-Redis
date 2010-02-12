@@ -2,7 +2,7 @@ package AnyEvent::Redis;
 
 use strict;
 use 5.008_001;
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 use constant DEBUG => $ENV{ANYEVENT_REDIS_DEBUG};
 use AnyEvent;
@@ -70,7 +70,7 @@ sub connect {
 
         my $hd = AnyEvent::Handle->new(
             fh => $fh,
-            on_error => sub { $_[0]->destory },
+            on_error => sub { $_[0]->destroy },
             on_eof   => sub { $_[0]->destroy },
         );
 
