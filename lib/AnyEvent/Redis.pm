@@ -2,7 +2,7 @@ package AnyEvent::Redis;
 
 use strict;
 use 5.008_001;
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 use constant DEBUG => $ENV{ANYEVENT_REDIS_DEBUG};
 use AnyEvent;
@@ -13,7 +13,7 @@ use Try::Tiny;
 our $AUTOLOAD;
 
 my %bulk_command = map { $_ => 1 }
-    qw( set setnx rpush lpush lset lrem sadd srem sismember echo );
+    qw( set setnx rpush lpush lset lrem sadd srem sismember echo getset smove zadd zrem zscore zincrby append );
 
 sub new {
     my($class, %args) = @_;
