@@ -2,7 +2,7 @@ package AnyEvent::Redis;
 
 use strict;
 use 5.008_001;
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 
 use constant DEBUG => $ENV{ANYEVENT_REDIS_DEBUG};
 use AnyEvent;
@@ -155,6 +155,8 @@ sub connect {
                     warn "size is $size" if DEBUG;
                     if ($result < 0) {
                         return $cv_send->($cv, undef);
+                    } elsif ($result == 0) {
+                        return $cv_send->($cv, []);
                     }
                     my @lines;
                     my $multi_cb; $multi_cb = sub {
