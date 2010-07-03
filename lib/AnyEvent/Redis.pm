@@ -2,7 +2,7 @@ package AnyEvent::Redis;
 
 use strict;
 use 5.008_001;
-our $VERSION = '0.09';
+our $VERSION = '0.10';
 
 use constant DEBUG => $ENV{ANYEVENT_REDIS_DEBUG};
 use AnyEvent;
@@ -13,7 +13,7 @@ use Try::Tiny;
 our $AUTOLOAD;
 
 my %bulk_command = map { $_ => 1 }
-    qw( set setnx rpush lpush lset lrem sadd srem sismember echo getset smove zadd zrem zscore zincrby append );
+    qw( set setnx rpush lpush lset lrem sadd srem sismember echo getset smove zadd zrem zscore zincrby append hexists hset hget hmget hmset hdel);
 
 sub new {
     my($class, %args) = @_;
@@ -166,7 +166,8 @@ sub connect {
                             my($hd, $line) = @_;
                             warn "line: <$line>" if DEBUG;
                             $line =~ s/^.//;
-                            $hd->unshift_read(chunk => $line + 2, sub {
+                            my $chunk = ($line == -1) ? 0 : $line + 2;
+                            $hd->unshift_read(chunk => $chunk , sub {
                                 my($hd, $chunk) = @_;
                                 $chunk =~ s/\r\n$//;
                                 warn "chunk <$chunk>" if DEBUG;
