@@ -2,7 +2,7 @@ package AnyEvent::Redis;
 
 use strict;
 use 5.008_001;
-our $VERSION = '0.11';
+our $VERSION = '0.12';
 
 use constant DEBUG => $ENV{ANYEVENT_REDIS_DEBUG};
 use AnyEvent;
@@ -13,7 +13,7 @@ use Try::Tiny;
 our $AUTOLOAD;
 
 my %bulk_command = map { $_ => 1 }
-    qw( set setnx rpush lpush lset lrem sadd srem sismember echo getset smove zadd zrem zscore zincrby append hexists hset hget hmget hmset hdel);
+    qw( set setnx rpush lpush lset lrem sadd srem sismember echo getset smove zadd zrem zscore zincrby append hexists hset hsetnx hget hmget hmset hdel);
 
 sub new {
     my($class, %args) = @_;
@@ -53,6 +53,13 @@ sub all_cv {
     $self->{all_cv};
 }
 
+sub cleanup {
+    my $self = shift;
+    delete $self->{cmd_cb};
+    delete $self->{sock};
+    $self->{on_error}->(@_);
+}
+
 sub connect {
     my $self = shift;
 
@@ -70,8 +77,14 @@ sub connect {
 
         my $hd = AnyEvent::Handle->new(
             fh => $fh,
-            on_error => sub { $_[0]->destroy },
-            on_eof   => sub { $_[0]->destroy },
+            on_error => sub { $_[0]->destroy;
+                              if ($_[1]) {
+                                  $self->cleanup($_[2]);
+                              }
+                          },
+            on_eof   => sub { $_[0]->destroy;
+                              $self->cleanup('connection closed');
+                          },
         );
 
         $self->{cmd_cb} = sub {
