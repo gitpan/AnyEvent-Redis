@@ -27,4 +27,4 @@ requires:
 resources:
   license: http://dev.perl.org/licenses/
   repository: git://github.com/miyagawa/AnyEvent-Redis.git
-version: 0.20
+version: 0.21
