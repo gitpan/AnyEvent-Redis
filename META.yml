@@ -1,30 +1,25 @@
----
-abstract: 'Non-blocking Redis client'
+--- #YAML:1.0
+name:               AnyEvent-Redis
+version:            0.1
+abstract:           an event-driven Redis client
 author:
-  - 'Tatsuhiko Miyagawa'
-build_requires:
-  ExtUtils::MakeMaker: 6.42
-  Test::More: 0
-  Test::TCP: 1.03
+    - Michael S. Fischer <michael+cpan@dynamine.net>
+license:            perl
+distribution_type:  module
 configure_requires:
-  ExtUtils::MakeMaker: 6.42
-distribution_type: module
-generated_by: 'Module::Install version 1.00'
-license: perl
-meta-spec:
-  url: http://module-build.sourceforge.net/META-spec-v1.4.html
-  version: 1.4
-name: AnyEvent-Redis
-no_index:
-  directory:
-    - inc
-    - t
-    - xt
+    ExtUtils::MakeMaker:  0
+build_requires:
+    ExtUtils::MakeMaker:  0
 requires:
-  AnyEvent: 0
-  Try::Tiny: 0
-  perl: 5.8.1
-resources:
-  license: http://dev.perl.org/licenses/
-  repository: git://github.com/miyagawa/AnyEvent-Redis.git
-version: 0.22
+    AnyEvent:       5.271
+    common::sense:  0
+    Object::Event:  1.21
+    Test::More:     0
+no_index:
+    directory:
+        - t
+        - inc
+generated_by:       ExtUtils::MakeMaker version 6.56
+meta-spec:
+    url:      http://module-build.sourceforge.net/META-spec-v1.4.html
+    version:  1.4

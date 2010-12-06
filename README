@@ -1,116 +1,42 @@
-NAME
-    AnyEvent::Redis - Non-blocking Redis client
+AnyEvent-Redis
 
-SYNOPSIS
-      use AnyEvent::Redis;
+AnyEvent::Redis is an event-driven (asynchronous) client for the Redis
+key-value (NoSQL) database server.  Both standard query and subscriber modes
+are available.
 
-      my $redis = AnyEvent::Redis->new(
-          host => '127.0.0.1',
-          port => 6379,
-          on_error => sub { warn @_ },
-      );
+INSTALLATION
 
-      # callback based
-      $redis->set( 'foo'=> 'bar', sub { warn "SET!" } );
-      $redis->get( 'foo', sub { my $value = shift } );
+To install this module, run the following commands:
 
-      my ($key, $value) = ('list_key', 123);
-      $redis->lpush( $key, $value );
-      $redis->lpop( $key, sub { my $value = shift });
+	perl Makefile.PL
+	make
+	make test
+	make install
 
-      # condvar based
-      my $cv = $redis->lpop( $key );
-      $cv->cb(sub { my $value = $_[0]->recv });
+SUPPORT AND DOCUMENTATION
 
-DESCRIPTION
-    AnyEvent::Redis is a non-blocking Redis client using AnyEvent.
+After installing, you can find documentation for this module with the
+perldoc command.
 
-METHODS
-    All methods supported by your version of Redis should be supported.
+    perldoc AnyEvent::Redis
+    perldoc AnyEvent::Redis::Subscriber
 
-  Normal commands
-    There are two alternative approaches for handling results from commands.
+SOURCE CODE
 
-    *   AnyEvent::CondVar based:
-
-          my $cv = $redis->command(
-            # arguments to command
-          );
-
-          $cv->cb(sub {
-            my($cv) = @_;
-            my($result, $err) = $cv->recv
-          });
-
-    *   Callback:
-
-          $redis->command(
-            # arguments,
-            sub {
-              my($result, $err) = @_;
-            });
-
-        (Callback is a wrapper around the $cv approach.)
-
-  Subscriptions
-    The subscription methods ("subscribe" and "psubscribe") must be used
-    with a callback:
-
-      my $cv = $redis->subscribe("test", sub {
-        my($message, $channel[, $actual_channel]) = @_;
-        # ($actual_channel is provided for pattern subscriptions.)
-      });
-
-    The $cv condition will be met on unsubscribing from the channel.
-
-    Due to limitations of the Redis protocol the only valid commands on a
-    connection with an active subscription are subscribe and unsubscribe
-    commands.
-
-  Common methods
-    *   get
-
-    *   set
-
-    *   hset
-
-    *   hget
-
-    *   lpush
-
-    *   lpop
-
-    The Redis command reference
-    (<http://code.google.com/p/redis/wiki/CommandReference>) lists all
-    commands Redis supports.
-
-REQUIREMENTS
-    This requires Redis >= 1.2.
-
-COPYRIGHT
-    Tatsuhiko Miyagawa <miyagawa@bulknews.net> 2009-
-
-LICENSE
-    This library is free software; you can redistribute it and/or modify it
-    under the same terms as Perl itself.
-
-AUTHORS
-    Tatsuhiko Miyagawa
-
-    David Leadbeater
-
-    Chia-liang Kao
-
-    franck cuny
-
-    Lee Aylward
-
-    Joshua Barratt
-
-    Jeremy Zawodny
-
-    Leon Brocard
+The official Git repository for AnyEvent::Redis is located at
+https://github.com/otterley/AnyEvent-Redis.
 
 SEE ALSO
-    Redis, AnyEvent
+
+Redis <http://redis.io>
+
+LICENSE AND COPYRIGHT
+
+Copyright (C) 2010 Michael S. Fischer
+
+This program is free software; you can redistribute it and/or modify it
+under the terms of either: the GNU General Public License as published
+by the Free Software Foundation; or the Artistic License.
+
+See http://dev.perl.org/licenses/ for more information.
 

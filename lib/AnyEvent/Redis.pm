@@ -1,467 +1,218 @@
 package AnyEvent::Redis;
 
-use strict;
-use 5.008_001;
-our $VERSION = '0.22';
+use 5.008;
+use common::sense;
 
-use constant DEBUG => $ENV{ANYEVENT_REDIS_DEBUG};
-use AnyEvent;
-use AnyEvent::Handle;
-use AnyEvent::Socket;
-use Try::Tiny;
 use Carp qw(croak);
+use AnyEvent::Handle;
+use AnyEvent::Redis::Protocol;
 
-our $AUTOLOAD;
-
-sub new {
-    my($class, %args) = @_;
-
-    my $host = delete $args{host} || '127.0.0.1';
-    my $port = delete $args{port} || 6379;
-
-    bless {
-        host => $host,
-        port => $port,
-        %args,
-    }, $class;
-}
-
-sub run_cmd {
-    my $self = shift;
-    my $cmd  = shift;
-
-    $self->{cmd_cb} or return $self->connect($cmd, @_);
-    $self->{cmd_cb}->($cmd, @_);
-}
-
-sub DESTROY { }
-
-sub AUTOLOAD {
-    my $self = shift;
-    (my $method = $AUTOLOAD) =~ s/.*:://;
-    $self->run_cmd($method, @_);
-}
-
-sub all_cv {
-    my $self = shift;
-    $self->{all_cv} = shift if @_;
-    unless ($self->{all_cv}) {
-        $self->{all_cv} = AE::cv;
-    }
-    $self->{all_cv};
-}
-
-sub cleanup {
-    my $self = shift;
-    delete $self->{cmd_cb};
-    delete $self->{sock};
-    $self->{on_error}->(@_) if $self->{on_error};
-}
-
-sub connect {
-    my $self = shift;
-
-    my $cv;
-    if (@_) {
-        $cv = AE::cv;
-        push @{$self->{connect_queue}}, [ $cv, @_ ];
-    }
-
-    return $cv if $self->{sock};
-
-    $self->{sock} = tcp_connect $self->{host}, $self->{port}, sub {
-        my $fh = shift
-            or do {
-              my $err = "Can't connect Redis server: $!";
-              $self->cleanup($err);
-              $cv->croak($err);
-              return
-            };
-
-        my $hd = AnyEvent::Handle->new(
-            fh => $fh,
-            on_error => sub { $_[0]->destroy;
-                              if ($_[1]) {
-                                  $self->cleanup($_[2]);
-                              }
-                          },
-            on_eof   => sub { $_[0]->destroy;
-                              $self->cleanup('connection closed');
-                          },
-        );
-
-        $self->{cmd_cb} = sub {
-            $self->all_cv->begin;
-            my $command = shift;
-
-            my($cv, $cb);
-            if (@_) {
-                $cv = pop if UNIVERSAL::isa($_[-1], 'AnyEvent::CondVar');
-                $cb = pop if ref $_[-1] eq 'CODE';
-            }
-
-            my $send = join("\r\n",
-                  "*" . (1 + @_),
-                  map(('$' . length $_ => $_), uc($command), @_))
-                . "\r\n";
-
-            warn $send if DEBUG;
-
-            $cv ||= AE::cv;
-
-            $hd->push_write($send);
-
-            # Are we already subscribed to anything?
-            if($self->{sub} && %{$self->{sub}}) {
-
-              croak "Use of non-pubsub command during pubsub session may result in unexpected behaviour"
-                unless $command =~ /^p?(?:un)?subscribe$/i;
-
-              # Remember subscriptions
-              $self->{sub}->{$_} ||= [$cv, $cb] for @_;
-
-            } elsif ($command !~ /^p?subscribe$/i) {
-
-                $cv->cb(sub {
-                    my $cv = shift;
-                    try {
-                        my $res = $cv->recv;
-                        $cb->($res);
-                    } catch {
-                        ($self->{on_error} || sub { die @_ })->($_);
-                    }
-                }) if $cb;
-
-                $hd->push_read(ref $self => sub {
-                        my($res, $err) = @_;
-
-                        if($command eq 'info') {
-                          $res = { map { split /:/, $_, 2 } split /\r\n/, $res };
-                        } elsif($command eq 'keys' && !ref $res) {
-                          # Older versions of Redis (1.2) need this
-                          $res = [split / /, $res];
-                        }
-
-                        $self->all_cv->end;
-                        $err ? $cv->croak($res) : $cv->send($res);
-                    });
-
-            } else {
-                croak "Must provide a CODE reference for subscriptions" unless $cb;
-
-                # Remember subscriptions
-                $self->{sub}->{$_} ||= [$cv, $cb] for @_;
-
-                my $res_cb; $res_cb = sub {
-
-                    $hd->push_read(ref $self => sub {
-                            my($res, $err) = @_;
-
-                            if(ref $res) {
-                                my $action = lc $res->[0];
-                                warn "$action $res->[1]" if DEBUG;
-
-                                if($action eq 'message') {
-                                    $self->{sub}->{$res->[1]}[1]->($res->[2], $res->[1]);
-
-                                } elsif($action eq 'pmessage') {
-                                    $self->{sub}->{$res->[1]}[1]->($res->[3], $res->[2], $res->[1]);
-
-                                } elsif($action eq 'subscribe' || $action eq 'psubscribe') {
-                                    $self->{sub_count} = $res->[2];
-
-                                } elsif($action eq 'unsubscribe' || $action eq 'punsubscribe') {
-                                    $self->{sub_count} = $res->[2];
-                                    $self->{sub}->{$res->[1]}[0]->send;
-                                    delete $self->{sub}->{$res->[1]};
-                                    $self->all_cv->end;
-
-                                } else {
-                                    warn "Unknown pubsub action: $action";
-                                }
-                            }
-
-                            if($self->{sub_count} || %{$self->{sub}}) {
-                                # Carry on reading while we are subscribed
-                                $res_cb->();
-                            }
-                        });
-                };
-
-                $res_cb->();
-            }
-
-            return $cv;
-        };
-
-        for my $queue (@{$self->{connect_queue} || []}) {
-            my($cv, @args) = @$queue;
-            $self->{cmd_cb}->(@args, $cv);
-        }
-
-    };
-
-    return $cv;
-}
-
-sub anyevent_read_type {
-    my(undef, $cb) = @_;
-
-    sub {
-        my($hd) = @_;
-
-        return unless defined $hd->{rbuf};
-
-        if($hd->{rbuf} =~ /^[-+:]/) {
-            $hd->{rbuf} =~ s/^([-+:])([^\015\012]*)\015?\012// or return;
-
-            $cb->($2, $1 eq '-');
-
-            return 1;
-
-        } elsif($hd->{rbuf} =~ /^\$/) {
-            $hd->{rbuf} =~ s/^\$([-0-9]+)\015?\012// or return;
-            my $len = $1;
-
-            if($len < 0) {
-                $cb->(undef);
-            } elsif($len + 2 <= length $hd->{rbuf}) {
-                $cb->(substr $hd->{rbuf}, 0, $len);
-                # Remove ending newline
-                substr $hd->{rbuf}, 0, $len + 2, "";
-            } else {
-                $hd->unshift_read (chunk => $len + 2, sub {
-                        $cb->(substr $_[1], 0, $len);
-                    });
-            }
-
-            return 1;
-
-        } elsif($hd->{rbuf} =~ /^\*/) {
-
-            $hd->{rbuf} =~ s/^\*([-0-9]+)\015?\012// or return;
-            my $size = $1;
-            warn "expecting $size values" if DEBUG;
-
-            my @lines;
-
-            my $reader; $reader = sub {
-                my($hd, $async) = @_;
-
-                while(@lines < $size) {
-                    if($hd->{rbuf} =~ /^([\$\-+:])([^\012\015]+)\015?\012/) {
-                        my $type = $1;
-                        my $line = $2;
-
-                        if($type =~ /[-+:]/) {
-                            $hd->{rbuf} =~ s/^[^\012\015]+\015?\012//;
-                            push @lines, $line;
-                        } elsif($line < 0) {
-                            $hd->{rbuf} =~ s/^[^\012\015]+\015?\012//;
-                            push @lines, undef;
-
-                        } elsif((1 + length($2) + 2 # Initial line
-                                 + $line + 2)       # Data and newline
-                                <= length $hd->{rbuf}) {
-                            $hd->{rbuf} =~ s/^[^\012\015]+\015?\012//;
-                            push @lines, substr $hd->{rbuf}, 0, $line, "";
-                            $hd->{rbuf} =~ s/^\015?\012//;
-
-                        } else {
-                            # Data not buffered, so we need to do this async
-                            $hd->unshift_read($reader) if $async;
-                            return $async;
-                        }
-                    } elsif($hd->{rbuf} =~ /^\*/) { # Nested
-                        my $reader_closure = $reader; # Need to avoid holding circular ref
-
-                        $hd->unshift_read(__PACKAGE__, sub {
-                                push @lines, $_[0];
-
-                                if(@lines == $size) {
-                                    warn "$size nested values" if DEBUG;
-                                    $cb->(\@lines);
-                                    undef $reader_closure;
-                                } else {
-                                    $hd->unshift_read($reader_closure);
-                                }
-                                return 1;
-                            });
-
-                        undef $reader;
-                        return 1;
-                    } else {
-                        $hd->unshift_read($reader) if $async;
-                        return $async;
-                    }
-                }
-
-                if($size < 0 || @lines == $size) {
-                    warn "Got $size values" if DEBUG;
-                    $cb->($size < 0 ? undef : \@lines);
-                    undef $reader;
-                    return 1;
-                }
-
-                die "unreachable";
-            };
-
-            return $reader->($hd, 1);
-
-        } elsif(length $hd->{rbuf}) {
-            # remove extra lines
-            $hd->{rbuf} =~ s/^\015?\012//g;
-
-            if(length $hd->{rbuf}) {
-                # Unknown
-                $cb->("Unknown type", 1);
-                return 1;
-            }
-        }
-
-        return;
-    }
-}
-
-1;
-__END__
-
-=encoding utf-8
-
-=for stopwords
+our $VERSION = 0.1;
 
 =head1 NAME
 
-AnyEvent::Redis - Non-blocking Redis client
+AnyEvent::Redis - an event-driven Redis client
 
 =head1 SYNOPSIS
 
-  use AnyEvent::Redis;
+ use AnyEvent::Redis;
+ my $redis = AnyEvent::Redis->connect(
+     host => 'redis',
+     on_connect => $cb, 
+     on_connect_error => $errcb,
+     on_error => $errcb,
+ );
 
-  my $redis = AnyEvent::Redis->new(
-      host => '127.0.0.1',
-      port => 6379,
-      on_error => sub { warn @_ },
-  );
+ # Generic query method
+ $redis->query('SET', $key, $value, $cb);
 
-  # callback based
-  $redis->set( 'foo'=> 'bar', sub { warn "SET!" } );
-  $redis->get( 'foo', sub { my $value = shift } );
-
-  my ($key, $value) = ('list_key', 123);
-  $redis->lpush( $key, $value );
-  $redis->lpop( $key, sub { my $value = shift });
-
-  # condvar based
-  my $cv = $redis->lpop( $key );
-  $cv->cb(sub { my $value = $_[0]->recv });
+ # Autoloaded query method
+ $redis->set($key, $value, $cb);
 
 =head1 DESCRIPTION
 
-AnyEvent::Redis is a non-blocking Redis client using AnyEvent.
+This module is an AnyEvent user; you must use and run a supported event
+loop.
 
-=head1 METHODS
+AnyEvent::Redis is an event-driven (asynchronous) client for the Redis
+key-value (NoSQL) database server.  Every operation is supported, B<except>
+subscription to Redis "classes" (i.e. channels), which is supported by
+AnyEvent::Redis::Subscriber.  However, this module may be used to publish to
+channels.
 
-All methods supported by your version of Redis should be supported.
+=head2 Establishing a connection
 
-=head2 Normal commands
+To connect to the Redis server, use the connect() method:
 
-There are two alternative approaches for handling results from commands.
+ my $redis = AnyEvent::Redis->connect(host => <host>, ...);
 
-=over 4
+The C<host> argument is required.
 
-=item * L<AnyEvent::CondVar> based:
+Optional (but recommended) arguments include:
 
-  my $cv = $redis->command(
-    # arguments to command
-  );
+=over
 
-  $cv->cb(sub {
-    my($cv) = @_;
-    my($result, $err) = $cv->recv
-  });
+=item port => $port
 
-=item * Callback:
+Connect to the server on the specified port number.  (If not specified,
+the default port will be used.)
 
-  $redis->command(
-    # arguments,
-    sub {
-      my($result, $err) = @_;
+=item auth => $password
+
+Authenticate to the server with the given password.
+
+=item on_connect => $cb->($conn, $host, $port)
+
+Specifies a callback to be executed upon a successful connection.  The
+connection object and the actual peer host and port number will be passed as
+arguments to the callback.
+
+=item on_connect_error => $cb->($conn, $errmsg)
+
+Specifies a callback to be executed if the connection failed (or authentication
+failed).  The connection object and the error message will be passed as
+arguments to the callback.  The connection is not reusable.
+
+=item on_error => $cb->($conn, $errmsg)
+
+Specifies a callback to be executed if an I/O error occurs (e.g. connection
+reset by peer).  The connection object and the error message will be passed as
+arguments to the callback.  The connection is not reusable.
+
+=back
+
+=cut
+
+sub connect {
+    my ($class, %args) = @_;
+    
+    $args{host} or croak "Missing host";
+    $args{port} ||= 6379;
+
+    my $self = { %args };
+    bless $self, $class;
+
+    $self->{handle} = AnyEvent::Handle->new(
+        connect => [ $self->{host}, $self->{port} ],
+        keepalive  => 1,
+        no_delay   => 1,
+        on_connect => sub { 
+            my ($handle, $host, $port) = @_;
+            if ($self->{auth}) {
+                $self->{handle}->push_write('AnyEvent::Redis::Protocol', 
+                                            AUTH => $self->{auth});
+                $self->{handle}->push_read('AnyEvent::Redis::Protocol' => sub {
+                        my ($handle, $ok) = @_;
+                        if ($ok) {
+                            $self->{on_connect}->($self, $host, $port) 
+                                if $self->{on_connect};
+                        } else {
+                            $self->{handle}->destroy;
+                            $self->{on_connect_error}->($self, $_[2])
+                                if $self->{on_connect_error};
+                        }
+                });
+            } else {
+                $self->{on_connect}->($self, $host, $port) 
+                    if $self->{on_connect};
+            }
+        },
+        on_connect_error => sub { 
+            $self->{on_connect_error}->($self, $_[1]) 
+                if $self->{on_connect_error};
+        },
+        on_error   => sub { 
+            $self->{handle}->destroy; 
+            $self->{on_error}->($self, $_[2]) if $self->{on_error};
+        }, 
+    );
+
+    return $self;
+}
+
+=head2 Queries and responses
+
+After you have successfully connected to the server, you can issue 
+queries to it.  (You'll want to do this in the C<on_connect> callback
+handler fired by connect(), above.)  
+
+To issue a query, use the query() method:
+
+  $redis->query(@args, $cb->($errmsg, @data)));
+
+The initial list of arguments to query() comprise the actual command.
+(See the command reference
+L<http://code.google.com/p/redis/wiki/CommandReference> for a list of available
+commands.)
+
+The final argument to query() specifies a callback (code reference) that will
+be fired when a response to the query is received.  It will be called with the
+error message (which will be C<undef> if there was no error) as the first
+argument; the remaining arguments will be the values (if any) that comprise the
+response.  
+
+=cut
+
+sub query {
+    my ($self, @args) = @_;
+
+    my $cb = pop @args;
+    ref($cb) eq 'CODE' or croak 'Missing callback';
+    scalar @args or croak "Missing args";
+
+    $args[0] !~ /^P?(?:UN)?SUBSCRIBE/ 
+        or croak 'Subscriptions not supported; use AnyEvent::Redis::Subscriber instead';
+
+    $self->{handle}->push_write('AnyEvent::Redis::Protocol', @args);
+    $self->{handle}->push_read('AnyEvent::Redis::Protocol' => sub {
+        my ($handle, $errmsg, @values) = @_;
+        $cb->($errmsg, @values);
     });
+}
 
-(Callback is a wrapper around the C<$cv> approach.)
+=pod
 
-=back
+Alternatively, you may invoke Redis commands as methods, e.g.: 
 
-=head2 Subscriptions
+ $redis->set(key1 => $val1, sub { ... });
+ $redis->get(key1 => sub { ... });
 
-The subscription methods (C<subscribe> and C<psubscribe>) must be used with a callback:
+=cut
 
-  my $cv = $redis->subscribe("test", sub {
-    my($message, $channel[, $actual_channel]) = @_;
-    # ($actual_channel is provided for pattern subscriptions.)
-  });
+sub AUTOLOAD {
+    use vars '$AUTOLOAD';
+    my $op = $AUTOLOAD;
+    $op =~ s/.*:://;
+    my ($self, @args) = @_;
+    $self->query(uc($op), @args);
+}
 
-The C<$cv> condition will be met on unsubscribing from the channel.
-
-Due to limitations of the Redis protocol the only valid commands on a
-connection with an active subscription are subscribe and unsubscribe commands.
-
-=head2 Common methods
-
-=over 4
-
-=item * get
-
-=item * set
-
-=item * hset
-
-=item * hget
-
-=item * lpush
-
-=item * lpop
-
-=back
-
-The Redis command reference
-(L<http://code.google.com/p/redis/wiki/CommandReference>) lists all commands
-Redis supports.
-
-=head1 REQUIREMENTS
-
-This requires Redis >= 1.2.
-
-=head1 COPYRIGHT
-
-Tatsuhiko Miyagawa E<lt>miyagawa@bulknews.netE<gt> 2009-
-
-=head1 LICENSE
-
-This library is free software; you can redistribute it and/or modify
-it under the same terms as Perl itself.
-
-=head1 AUTHORS
-
-Tatsuhiko Miyagawa
-
-David Leadbeater
-
-Chia-liang Kao
-
-franck cuny
-
-Lee Aylward
-
-Joshua Barratt
-
-Jeremy Zawodny
-
-Leon Brocard
+sub DESTROY {
+    # Don't delete this, or AUTOLOAD will be invoked on DESTROY.
+}
 
 =head1 SEE ALSO
 
-L<Redis>, L<AnyEvent>
+Redis Command Reference L<http://code.google.com/p/redis/wiki/CommandReference>
+
+=head1 AUTHOR
+
+Michael S. Fischer <michael+cpan@dynamine.net>
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (C) 2010 Michael S. Fischer.
+
+This program is free software; you can redistribute it and/or modify it
+under the terms of either: the GNU General Public License as published
+by the Free Software Foundation; or the Artistic License.
+
+See http://dev.perl.org/licenses/ for more information.
 
 =cut
+
+1;
+
+__END__
+
+# vim:syn=perl:ts=4:sw=4:et:ai
