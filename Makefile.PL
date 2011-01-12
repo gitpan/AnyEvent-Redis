@@ -1,22 +1,11 @@
-use strict;
-use warnings;
-use ExtUtils::MakeMaker;
-
-WriteMakefile(
-    NAME                => 'AnyEvent::Redis',
-    AUTHOR              => q{Michael S. Fischer <michael+cpan@dynamine.net>},
-    VERSION_FROM        => 'lib/AnyEvent/Redis.pm',
-    ABSTRACT_FROM       => 'lib/AnyEvent/Redis.pm',
-    ($ExtUtils::MakeMaker::VERSION >= 6.3002
-      ? ('LICENSE'=> 'perl')
-      : ()),
-    PL_FILES            => {},
-    PREREQ_PM => {
-        'common::sense' => 0,
-        'AnyEvent'      => 5.271,
-        'Object::Event' => 1.21,
-        'Test::More'    => 0,
-    },
-    dist                => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
-    clean               => { FILES => 'AnyEvent-Redis-*' },
-);
+use inc::Module::Install;
+name 'AnyEvent-Redis';
+all_from 'lib/AnyEvent/Redis.pm';
+readme_from 'lib/AnyEvent/Redis.pm';
+requires 'AnyEvent';
+requires 'Try::Tiny';
+build_requires 'Test::More';
+test_requires 'Test::TCP',  1.03;
+author_tests('xt');
+auto_set_repository;
+WriteAll;
